@@ -1,4 +1,5 @@
 screenshot
 ==========
 
-A package for taking screenshots in golang
+A package for taking screenshots with golang.
+
