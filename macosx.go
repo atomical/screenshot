@@ -6,8 +6,31 @@ package screen
 // #cgo LDFLAGS: -framework Cocoa
 // #include <QuartzCore/QuartzCore.h>
 // #include <Cocoa/Cocoa.h>
+// void ** window_ids_to_int_array_bridge( CGWindowID *window_ids, int length){
+//   CGWindowID *windows = malloc(length * sizeof(CGWindowID));
+//   memcpy(windows, window_ids, length * sizeof(CGWindowID));
+//   return (void **)(windows);
+// }
 import "C"
 import "unsafe"
+import cg "github.com/atomical/coregraphics"
+// import "log"
+
+// Window Image Types
+// https://developer.apple.com/library/mac/documentation/Carbon/reference/CGWindow_Reference/Constants/Constants.html#//apple_ref/doc/constant_group/Window_Image_Types
+const (
+  KCGWindowImageDefault             = C.kCGWindowImageDefault
+  KCGWindowImageBoundsIgnoreFraming = C.kCGWindowImageBoundsIgnoreFraming
+  KCGWindowImageShouldBeOpaque      = C.kCGWindowImageShouldBeOpaque
+  KCGWindowImageOnlyShadows         = C.kCGWindowImageOnlyShadows
+  KCGWindowImageBestResolution      = C.kCGWindowImageBestResolution
+  KCGWindowImageNominalResolution   = C.kCGWindowImageNominalResolution
+)
+
+type CGImageRef struct {
+ Ref C.CGImageRef
+ Data []byte
+}
 
 type Image struct {
   Width int
@@ -17,18 +40,50 @@ type Image struct {
   DataLength int
 }
 
+type CaptureArea struct {
+  Rect cg.Rect
+  WindowIds []cg.CGWindowID
+}
+
 func MakeRect(x float64, y float64, w float64, h float64 ) C.CGRect{
   return C.CGRectMake(C.CGFloat(x), C.CGFloat(y), C.CGFloat(w), C.CGFloat(h))
 }
 
+func Capture( area CaptureArea ) Image {
+  rect := MakeRect( area.Rect.X, area.Rect.Y, area.Rect.Width, area.Rect.Height )
+  numberOfWindows := len(area.WindowIds)
+  var image C.CGImageRef
 
-func Capture(rect C.CGRect) Image{
-  image := C.CGWindowListCreateImage(
-   rect,
-   C.kCGWindowListOptionOnScreenOnly,
-   C.kCGNullWindowID,
-   C.kCGWindowImageDefault,
-  )
+  if numberOfWindows == 0 {
+
+    image = C.CGWindowListCreateImage(
+               rect,
+               C.kCGWindowListOptionOnScreenOnly,
+               C.kCGNullWindowID,
+               C.kCGWindowImageBoundsIgnoreFraming,
+              )
+
+  } else {
+
+    arrayRef := C.CFArrayCreate( 
+                  C.kCFAllocatorDefault,
+                  C.window_ids_to_int_array_bridge((*C.CGWindowID)(WindowIdSliceToCArray(area.WindowIds)), C.int(numberOfWindows)), //&ptr, //cb,
+                  C.CFIndex(numberOfWindows), 
+                  nil,
+                  )
+
+    // fmt.Println(area)
+    // fmt.Println(rect)
+    // fmt.Println("Array count:", C.CFArrayGetCount(arrayRef))
+    // fmt.Println(C.CFArrayGetValueAtIndex(arrayRef, 0))
+ 
+    image = C.CGWindowListCreateImageFromArray(
+              C.CGRectNull, //rect,
+              arrayRef,
+              C.kCGWindowImageBoundsIgnoreFraming,
+            )
+  }
+
 
   var width = C.CGImageGetWidth(image)
   var height= C.CGImageGetHeight(image)
@@ -40,7 +95,7 @@ func Capture(rect C.CGRect) Image{
               width,
               height,
               C.CGImageGetBitsPerComponent(image),
-              bitmapBytesPerRow,
+              bitmapBytesPerRow, //stride
               colorSpace,
               C.kCGImageAlphaPremultipliedLast)
   
@@ -63,4 +118,60 @@ func Capture(rect C.CGRect) Image{
     DataLength: len(bytes),
   }
  
+}
+
+func CGWindowListCreateImageFromArray( windowIds []cg.CGWindowID )  C.CGImageRef {
+  numberOfWindows := len(windowIds)
+  arrayRef := C.CFArrayCreate( 
+                C.kCFAllocatorDefault,
+                C.window_ids_to_int_array_bridge(
+                  (*C.CGWindowID)(WindowIdSliceToCArray(windowIds)), 
+                  C.int(numberOfWindows)),
+                C.CFIndex(numberOfWindows), 
+                nil)
+
+  image := C.CGWindowListCreateImageFromArray(
+            C.CGRectNull,
+            arrayRef,
+            C.kCGWindowImageBoundsIgnoreFraming,
+          )
+
+  return image
+}
+
+
+
+
+func CGImageRefToGoBytes( image C.CGImageRef )  []byte {
+  data := C.CGDataProviderCopyData(C.CGImageGetDataProvider(image))
+  ptr := C.CFDataGetBytePtr(data)
+
+  defer C.CGImageRelease(image)
+  defer C.CFRelease((C.CFTypeRef)(data))
+  
+  return C.GoBytes( unsafe.Pointer(ptr), C.int(C.CFDataGetLength(data)))
+}
+
+
+//   data := C.CGDataProviderCopyData(C.CGImageGetDataProvider(image))
+//   ptr := C.CFDataGetBytePtr(data)
+//   len := C.CFDataGetLength(data)
+//   bytes := C.GoBytes(unsafe.Pointer(ptr), C.int(len) )
+
+//   defer C.CGImageRelease(image)
+//   defer C.CFRelease((C.CFTypeRef)(data))
+
+//   return CGImageRef{ Ref: image, Data: bytes }
+// }
+
+func WindowIdSliceToCArray (byteSlice []cg.CGWindowID ) unsafe.Pointer {
+       var array = unsafe.Pointer(C.calloc(C.size_t(len(byteSlice)), 1))
+       var arrayptr = uintptr(array)
+
+       for i := 0; i < len(byteSlice); i ++ {
+              *(*cg.CGWindowID )(unsafe.Pointer(arrayptr)) = cg.CGWindowID(byteSlice[i])
+              arrayptr ++
+       }
+
+       return array
 }
